@@ -340,7 +340,7 @@
           </div>
 
           <div class="inline-note">
-            If you are creating repos inside an organization, your account must already have permission to create repositories there. A token alone cannot bypass org admin rules.
+            If you are creating repos inside an organization, your account must already have permission to create repositories there. A token alone cannot bypass org-level access rules.
           </div>
         </div>
       </div>
@@ -475,7 +475,7 @@
       const body = {
         name,
         description,
-        auto_init: false,
+        auto_init: true,
       };
 
       if (targetType === "org") {
@@ -491,14 +491,28 @@
       return await ghFetch(token, url, { method: "POST", body: JSON.stringify(body) });
     }
 
+    async function getRepo(token, owner, repo) {
+      return await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+    }
+
     async function repoExists(token, owner, name) {
       try {
-        await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+        await getRepo(token, owner, name);
         return true;
       } catch (e) {
         if (e.status === 404) return false;
         throw e;
       }
+    }
+
+    async function getDefaultBranchHead(token, owner, repo, fallbackBranch) {
+      const repoInfo = await getRepo(token, owner, repo);
+      const branchName = repoInfo.default_branch || fallbackBranch || "main";
+      const branchInfo = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branchName)}`);
+      return {
+        branchName,
+        headCommitSha: branchInfo.commit.sha,
+      };
     }
 
     async function createBlob(token, owner, repo, base64Content) {
@@ -517,12 +531,19 @@
       return res.sha;
     }
 
-    async function createCommit(token, owner, repo, message, treeSha) {
+    async function createCommit(token, owner, repo, message, treeSha, parents = []) {
       const res = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`, {
         method: "POST",
-        body: JSON.stringify({ message, tree: treeSha, parents: [] })
+        body: JSON.stringify({ message, tree: treeSha, parents })
       });
       return res.sha;
+    }
+
+    async function updateRef(token, owner, repo, branch, commitSha, force = true) {
+      return await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/heads/${encodeURIComponent(branch)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ sha: commitSha, force })
+      });
     }
 
     async function createRef(token, owner, repo, branch, commitSha) {
@@ -589,19 +610,28 @@
 
       setStatus("warn", "Creating destination repo");
       let targetRepo;
+      let branchName = defaultBranch;
+      let parentCommitSha = null;
+
       try {
         if (overwrite && await repoExists(token, targetOwner, repoName)) {
-          targetRepo = { full_name: `${targetOwner}/${repoName}` };
+          targetRepo = await getRepo(token, targetOwner, repoName);
           log(`Using existing repo ${targetOwner}/${repoName}.`);
         } else {
           targetRepo = await createRepo(token, targetOwner, targetType, repoName, description, visibility);
           log(`Created repo ${targetRepo.full_name}.`);
         }
+
+        const headInfo = await getDefaultBranchHead(token, targetOwner, repoName, defaultBranch);
+        branchName = headInfo.branchName;
+        parentCommitSha = headInfo.headCommitSha;
+        log(`Base branch: ${branchName}`);
+        log(`Base commit: ${parentCommitSha}`);
       } catch (e) {
         if (targetType === "org" && (e.status === 403 || e.status === 404)) {
           throw new Error(`Repo creation failed for the organization. The token's user must already have permission to create repositories in ${targetOwner}. GitHub will not allow org repo creation otherwise.`);
         }
-        throw new Error(`Repo creation failed: ${e.message}`);
+        throw new Error(`Repo setup failed: ${e.message}`);
       }
 
       setStatus("warn", "Downloading files and creating blobs");
@@ -629,15 +659,16 @@
       log(`Tree created: ${treeSha}`);
 
       const message = `Import ${sourceRoot} from ${parsed.owner}/${parsed.repo}`;
-      const commitSha = await createCommit(token, targetOwner, repoName, message, treeSha);
+      const commitSha = await createCommit(token, targetOwner, repoName, message, treeSha, parentCommitSha ? [parentCommitSha] : []);
       log(`Commit created: ${commitSha}`);
 
       try {
-        await createRef(token, targetOwner, repoName, defaultBranch, commitSha);
-        log(`Branch ${defaultBranch} created.`);
+        await updateRef(token, targetOwner, repoName, branchName, commitSha, true);
+        log(`Branch ${branchName} updated.`);
       } catch (e) {
-        if (String(e.message).includes("Reference already exists")) {
-          log(`Branch ${defaultBranch} already existed. Skipping ref creation.`);
+        if (e.status === 422 || e.status === 404) {
+          await createRef(token, targetOwner, repoName, branchName, commitSha);
+          log(`Branch ${branchName} created.`);
         } else {
           throw e;
         }
