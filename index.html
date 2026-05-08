@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Folder → New Repo Copier</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #11182d;
+      --panel-2: #0f1628;
+      --text: #e8eefc;
+      --muted: #9db0d1;
+      --line: #23304f;
+      --accent: #6ea8fe;
+      --accent-2: #8b5cf6;
+      --ok: #34d399;
+      --warn: #f59e0b;
+      --err: #f87171;
+      --shadow: 0 20px 60px rgba(0,0,0,.35);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background:
+        radial-gradient(circle at top left, rgba(110,168,254,.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(139,92,246,.14), transparent 24%),
+        linear-gradient(180deg, #070b15 0%, var(--bg) 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 32px 18px 48px;
+    }
+    .hero {
+      display: grid;
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      padding: 8px 12px;
+      border: 1px solid rgba(157,176,209,.18);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255,255,255,.03);
+      font-size: 13px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 50px);
+      line-height: 1.05;
+      letter-spacing: -.04em;
+    }
+    .sub {
+      margin: 0;
+      color: var(--muted);
+      max-width: 860px;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border: 1px solid rgba(157,176,209,.14);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card .hd {
+      padding: 18px 18px 0;
+    }
+    .card .bd {
+      padding: 18px;
+    }
+    .card h2 {
+      margin: 0 0 6px;
+      font-size: 18px;
+    }
+    .card p.help {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #c9d6ef;
+      margin: 0 0 8px;
+    }
+    input, select, textarea, button {
+      font: inherit;
+    }
+    input, select, textarea {
+      width: 100%;
+      background: rgba(5,10,20,.7);
+      color: var(--text);
+      border: 1px solid rgba(157,176,209,.22);
+      border-radius: 14px;
+      padding: 12px 14px;
+      outline: none;
+      transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(110,168,254,.8);
+      box-shadow: 0 0 0 4px rgba(110,168,254,.12);
+    }
+    textarea {
+      min-height: 98px;
+      resize: vertical;
+    }
+    .row { display: grid; gap: 12px; }
+    .row.two { grid-template-columns: 1fr 1fr; }
+    .row.three { grid-template-columns: 1fr 1fr 1fr; }
+    .field { margin-bottom: 14px; }
+    .inline-note {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.45;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 16px;
+      color: white;
+      cursor: pointer;
+      font-weight: 600;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 10px 24px rgba(110,168,254,.18);
+    }
+    button.secondary {
+      background: rgba(255,255,255,.07);
+      border: 1px solid rgba(157,176,209,.18);
+      box-shadow: none;
+    }
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.55;
+      background: rgba(5,10,20,.55);
+      border: 1px solid rgba(157,176,209,.16);
+      border-radius: 14px;
+      padding: 14px;
+      color: #dbe7ff;
+      max-height: 540px;
+      overflow: auto;
+    }
+    .status {
+      display: grid;
+      gap: 10px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      width: fit-content;
+      border: 1px solid rgba(157,176,209,.18);
+      background: rgba(255,255,255,.04);
+      color: var(--muted);
+    }
+    .pill.ok { color: #b7f7df; border-color: rgba(52,211,153,.28); }
+    .pill.err { color: #fecaca; border-color: rgba(248,113,113,.28); }
+    .pill.warn { color: #fde68a; border-color: rgba(245,158,11,.28); }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .small {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    a { color: #a7c7ff; }
+    .split {
+      display: grid;
+      gap: 18px;
+    }
+    .checkline {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .checkline input { width: auto; }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .row.two, .row.three { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div class="eyebrow">GitHub repo import tool</div>
+      <h1>Copy one folder from an existing repo into a brand-new repo.</h1>
+      <p class="sub">
+        Paste a GitHub folder URL, authenticate with a token that has permission to read the source repo and create repos in the destination org or account, and the app will create a new repository named after the folder and copy every file into it.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="hd">
+          <h2>Import settings</h2>
+          <p class="help">The safest setup is a fine-grained personal access token or GitHub App installation token. For a public website, put this behind a backend so the token never reaches the browser.</p>
+        </div>
+        <div class="bd">
+          <div class="field">
+            <label for="token">GitHub token</label>
+            <input id="token" type="password" placeholder="ghp_... or github_pat_..." autocomplete="off" />
+            <div class="inline-note">Needs repo read access on the source repo and repo creation permission on the target org/account.</div>
+          </div>
+
+          <div class="row two">
+            <div class="field">
+              <label for="targetOwner">Target owner / org</label>
+              <input id="targetOwner" type="text" placeholder="my-org-or-username" />
+            </div>
+            <div class="field">
+              <label for="targetType">Target type</label>
+              <select id="targetType">
+                <option value="org">Organization</option>
+                <option value="user">User</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="folderUrl">GitHub folder URL</label>
+            <input id="folderUrl" type="url" placeholder="https://github.com/owner/repo/tree/main/path/to/folder" />
+            <div class="inline-note">This app accepts URLs in the form <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. For a file link, it will import just that file.</div>
+          </div>
+
+          <div class="row two">
+            <div class="field">
+              <label for="newRepoName">New repo name</label>
+              <input id="newRepoName" type="text" placeholder="Auto-filled from folder name" />
+            </div>
+            <div class="field">
+              <label for="defaultBranch">Default branch name</label>
+              <input id="defaultBranch" type="text" value="main" />
+            </div>
+          </div>
+
+          <div class="row three">
+            <div class="field">
+              <label for="privacy">Visibility</label>
+              <select id="privacy">
+                <option value="private">Private</option>
+                <option value="public">Public</option>
+                <option value="internal">Internal</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="repoDescription">Repo description</label>
+              <input id="repoDescription" type="text" placeholder="Copied from folder import" />
+            </div>
+            <div class="field">
+              <label for="mode">Overwrite existing repo</label>
+              <select id="mode">
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="checkline">
+            <input id="includeRootFolder" type="checkbox" />
+            <label for="includeRootFolder" style="margin:0">Keep the selected folder as a top-level folder in the new repo</label>
+          </div>
+
+          <div class="actions">
+            <button id="runBtn">Create repo and copy folder</button>
+            <button id="fillExample" class="secondary">Fill example URL</button>
+            <button id="clearBtn" class="secondary">Clear log</button>
+          </div>
+
+          <div class="inline-note">
+            Requirements: the token must have permission to create repositories in the target owner/org. Some orgs require SSO authorization or approval for the token or app installation.
+          </div>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="card">
+          <div class="hd">
+            <h2>Status</h2>
+            <p class="help">Live progress while the app reads the source tree, creates blobs, then commits a new tree into the new repository.</p>
+          </div>
+          <div class="bd status">
+            <div id="pill" class="pill warn">Waiting for input</div>
+            <div id="summary" class="small">No operation started yet.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="hd">
+            <h2>Log</h2>
+            <p class="help">The import progress, one step at a time.</p>
+          </div>
+          <div class="bd">
+            <pre id="log"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const logEl = $("log");
+    const pillEl = $("pill");
+    const summaryEl = $("summary");
+    const runBtn = $("runBtn");
+
+    const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+    function log(line) {
+      const stamp = new Date().toISOString().slice(11, 19);
+      logEl.textContent += `[${stamp}] ${line}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(kind, text) {
+      pillEl.className = `pill ${kind || ""}`.trim();
+      pillEl.textContent = text;
+      summaryEl.textContent = text;
+    }
+
+    function parseGitHubUrl(url) {
+      const m = String(url || "").trim().match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(tree|blob)\/([^/]+)\/(.+)$/i);
+      if (!m) {
+        throw new Error("Use a GitHub URL like https://github.com/owner/repo/tree/main/path/to/folder");
+      }
+      return {
+        owner: decodeURIComponent(m[1]),
+        repo: decodeURIComponent(m[2].replace(/\.git$/i, "")),
+        kind: m[3].toLowerCase(),
+        branch: decodeURIComponent(m[4]),
+        path: decodeURIComponent(m[5]).replace(/^\/+|\/+$/g, ""),
+      };
+    }
+
+    function guessNameFromPath(path) {
+      const parts = String(path || "").split("/").filter(Boolean);
+      return parts[parts.length - 1] || "imported-folder";
+    }
+
+    function normalizeRepoName(name) {
+      return String(name || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .replace(/-+/g, "-")
+        .slice(0, 100) || "imported-folder";
+    }
+
+    async function ghFetch(token, url, options = {}) {
+      const headers = {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(options.headers || {})
+      };
+      const res = await fetch(url, { ...options, headers });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok) {
+        const msg = (data && (data.message || data.error)) ? (data.message || data.error) : text || `HTTP ${res.status}`;
+        const err = new Error(msg);
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
+      return data;
+    }
+
+    async function listFolderRecursive(token, owner, repo, branch, pathPrefix, keepRootFolder) {
+      const files = [];
+      const startPath = pathPrefix || "";
+
+      async function walk(path) {
+        const url = path
+          ? `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}?ref=${encodeURIComponent(branch)}`
+          : `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(branch)}`;
+        const data = await ghFetch(token, url);
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          if (item.type === "dir") {
+            await walk(item.path);
+          } else if (item.type === "file") {
+            const rel = keepRootFolder ? item.path : item.path.slice(startPath.length).replace(/^\/+/, "");
+            files.push({
+              path: rel || item.name,
+              downloadUrl: item.download_url,
+              size: item.size,
+              sha: item.sha,
+              encodingHint: item.encoding,
+            });
+          }
+        }
+      }
+
+      await walk(startPath);
+      return files;
+    }
+
+    async function createRepo(token, owner, targetType, name, description, visibility, autoInit = false) {
+      const body = {
+        name,
+        description,
+        auto_init: autoInit,
+      };
+      if (targetType === "org") {
+        body.private = visibility !== "public";
+        if (visibility === "internal") body.visibility = "internal";
+        const url = `https://api.github.com/orgs/${encodeURIComponent(owner)}/repos`;
+        return await ghFetch(token, url, { method: "POST", body: JSON.stringify(body) });
+      }
+      body.private = visibility !== "public";
+      if (visibility === "internal") body.visibility = "internal";
+      const url = `https://api.github.com/user/repos`;
+      return await ghFetch(token, url, { method: "POST", body: JSON.stringify(body) });
+    }
+
+    async function repoExists(token, owner, name) {
+      try {
+        await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+        return true;
+      } catch (e) {
+        if (e.status === 404) return false;
+        throw e;
+      }
+    }
+
+    async function createBlob(token, owner, repo, base64Content) {
+      const res = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs`, {
+        method: "POST",
+        body: JSON.stringify({ content: base64Content, encoding: "base64" })
+      });
+      return res.sha;
+    }
+
+    async function createTree(token, owner, repo, treeEntries) {
+      const res = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees`, {
+        method: "POST",
+        body: JSON.stringify({ tree: treeEntries, base_tree: EMPTY_TREE_SHA })
+      });
+      return res.sha;
+    }
+
+    async function createCommit(token, owner, repo, message, treeSha) {
+      const res = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`, {
+        method: "POST",
+        body: JSON.stringify({ message, tree: treeSha, parents: [] })
+      });
+      return res.sha;
+    }
+
+    async function createRef(token, owner, repo, branch, commitSha) {
+      return await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`, {
+        method: "POST",
+        body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commitSha })
+      });
+    }
+
+    async function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    async function fetchRawBase64(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Failed to fetch file: ${res.status} ${res.statusText}`);
+      const buffer = await res.arrayBuffer();
+      return await arrayBufferToBase64(buffer);
+    }
+
+    async function importFolder() {
+      const token = $("token").value.trim();
+      const targetOwner = $("targetOwner").value.trim();
+      const targetType = $("targetType").value;
+      const folderUrl = $("folderUrl").value.trim();
+      const defaultBranch = $("defaultBranch").value.trim() || "main";
+      const visibility = $("privacy").value;
+      const description = $("repoDescription").value.trim();
+      const repoNameInput = $("newRepoName").value.trim();
+      const overwrite = $("mode").value === "yes";
+      const keepRootFolder = $("includeRootFolder").checked;
+
+      if (!token) throw new Error("Paste a GitHub token first.");
+      if (!targetOwner) throw new Error("Enter the target owner or organization.");
+      if (!folderUrl) throw new Error("Paste a GitHub folder URL.");
+
+      const parsed = parseGitHubUrl(folderUrl);
+      const sourceRoot = guessNameFromPath(parsed.path);
+      const repoName = normalizeRepoName(repoNameInput || sourceRoot);
+      const sourceBasePath = parsed.kind === "tree" ? parsed.path : parsed.path.split("/").slice(0, -1).join("/");
+
+      setStatus("warn", "Reading source folder");
+      log(`Source: ${parsed.owner}/${parsed.repo}@${parsed.branch}/${parsed.path}`);
+      log(`Target: ${targetOwner}/${repoName}`);
+
+      if (!overwrite && await repoExists(token, targetOwner, repoName)) {
+        throw new Error(`Repository ${targetOwner}/${repoName} already exists. Turn on overwrite or change the repo name.`);
+      }
+
+      if (overwrite) {
+        log("Overwrite mode is on. Existing repo will be reused if it exists.");
+      }
+
+      const sourceItems = parsed.kind === "blob"
+        ? [{ path: parsed.path.split("/").pop(), downloadUrl: `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${parsed.branch}/${parsed.path}`, size: null }]
+        : await listFolderRecursive(token, parsed.owner, parsed.repo, parsed.branch, sourceBasePath, keepRootFolder);
+
+      if (!sourceItems.length) throw new Error("No files found at that folder path.");
+      log(`Found ${sourceItems.length} file(s).`);
+
+      setStatus("warn", "Creating destination repo");
+      let targetRepo = null;
+      try {
+        if (overwrite && await repoExists(token, targetOwner, repoName)) {
+          targetRepo = { full_name: `${targetOwner}/${repoName}` };
+          log(`Using existing repo ${targetOwner}/${repoName}.`);
+        } else {
+          targetRepo = await createRepo(token, targetOwner, targetType, repoName, description, visibility, false);
+          log(`Created repo ${targetRepo.full_name}.`);
+        }
+      } catch (e) {
+        throw new Error(`Repo creation failed: ${e.message}`);
+      }
+
+      setStatus("warn", "Downloading files and creating blobs");
+      const treeEntries = [];
+      let count = 0;
+      for (const item of sourceItems) {
+        count++;
+        const relPath = keepRootFolder
+          ? item.path.replace(/^\/+/, "")
+          : item.path.replace(new RegExp(`^${sourceBasePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?`), "");
+        if (!relPath) continue;
+        log(`Fetching ${count}/${sourceItems.length}: ${relPath}`);
+        const base64 = await fetchRawBase64(item.downloadUrl);
+        const blobSha = await createBlob(token, targetOwner, repoName, base64);
+        treeEntries.push({ path: relPath, mode: "100644", type: "blob", sha: blobSha });
+      }
+
+      if (!treeEntries.length) throw new Error("Nothing to write after path filtering.");
+
+      setStatus("warn", "Creating commit tree");
+      const treeSha = await createTree(token, targetOwner, repoName, treeEntries);
+      log(`Tree created: ${treeSha}`);
+
+      const message = `Import ${sourceRoot} from ${parsed.owner}/${parsed.repo}`;
+      const commitSha = await createCommit(token, targetOwner, repoName, message, treeSha);
+      log(`Commit created: ${commitSha}`);
+
+      try {
+        await createRef(token, targetOwner, repoName, defaultBranch, commitSha);
+        log(`Branch ${defaultBranch} created.`);
+      } catch (e) {
+        if (String(e.message).includes("Reference already exists")) {
+          log(`Branch ${defaultBranch} already existed. Skipping ref creation.`);
+        } else {
+          throw e;
+        }
+      }
+
+      setStatus("ok", "Import complete");
+      log(`Done. Repo ready: ${targetRepo.full_name || `${targetOwner}/${repoName}`}`);
+      log(`Open: https://github.com/${targetOwner}/${repoName}`);
+      summaryEl.innerHTML = `Created <strong>${targetOwner}/${repoName}</strong> from <strong>${parsed.owner}/${parsed.repo}</strong>.`;
+    }
+
+    $("runBtn").addEventListener("click", async () => {
+      runBtn.disabled = true;
+      setStatus("warn", "Working...");
+      try {
+        await importFolder();
+      } catch (err) {
+        console.error(err);
+        setStatus("err", "Import failed");
+        log(`ERROR: ${err.message}`);
+        summaryEl.textContent = err.message;
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+
+    $("fillExample").addEventListener("click", () => {
+      $("folderUrl").value = "https://github.com/octocat/Hello-World/tree/master/docs";
+      $("targetOwner").value = "your-org-or-username";
+      $("newRepoName").value = "docs";
+      $("repoDescription").value = "Imported from folder path";
+      setStatus("warn", "Example filled");
+      log("Filled example values.");
+    });
+
+    $("clearBtn").addEventListener("click", () => {
+      logEl.textContent = "";
+      setStatus("warn", "Log cleared");
+      summaryEl.textContent = "Log cleared.";
+    });
+
+    $("folderUrl").addEventListener("input", () => {
+      try {
+        const parsed = parseGitHubUrl($("folderUrl").value.trim());
+        const guess = normalizeRepoName(guessNameFromPath(parsed.path));
+        if (!$("newRepoName").value.trim()) $("newRepoName").value = guess;
+      } catch (_) {}
+    });
+
+    setStatus("warn", "Waiting for input");
+  </script>
+</body>
+</html>
