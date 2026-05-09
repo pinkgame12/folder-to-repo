@@ -269,6 +269,16 @@
           <p class="help">Use a fine-grained personal access token or GitHub App installation token. For a public site, move the GitHub calls to a backend so the token never reaches the browser.</p>
         </div>
         <div class="bd">
+          <!-- Preset selector (backend endpoint must be configured) -->
+          <div class="field">
+            <label for="preset">Quick Preset</label>
+            <select id="preset">
+              <option value="">None</option>
+              <option value="sfc">SFC (password required)</option>
+            </select>
+            <div class="inline-note">Select a preset to auto‑fill token and target owner. Token is never stored in this page.</div>
+          </div>
+
           <div class="field">
             <label for="token">GitHub token</label>
             <input id="token" type="password" placeholder="ghp_... or github_pat_..." autocomplete="off" />
@@ -371,6 +381,22 @@
   </div>
 
   <script>
+    /* ===== CONFIGURATION =====
+       Set this to the URL of your backend endpoint that returns the token.
+       Example: "https://your-worker.workers.dev/api/get-token"
+    */
+    const SECURE_TOKEN_ENDPOINT = "/api/get-token";   // 👈 CHANGE THIS to your actual backend URL
+
+    /* Preset meta data (no token here) */
+    const presets = {
+      sfc: {
+        targetOwner: "SchoolFlashCards5",
+        targetType: "org",
+        passwordRequired: true,
+        presetPassword: "31402850"   // this is checked before calling the backend
+      }
+    };
+
     const $ = (id) => document.getElementById(id);
     const logEl = $("log");
     const pillEl = $("pill");
@@ -679,6 +705,58 @@
       log(`Open: https://github.com/${targetOwner}/${repoName}`);
       summaryEl.innerHTML = `Created <strong>${targetOwner}/${repoName}</strong> from <strong>${parsed.owner}/${parsed.repo}</strong>.`;
     }
+
+    /* ---------- Preset handler (now calls backend instead of using hardcoded token) ---------- */
+    async function fetchTokenFromBackend(password) {
+      const res = await fetch(SECURE_TOKEN_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Backend error ${res.status}`);
+      }
+      const data = await res.json();
+      return data.token;
+    }
+
+    $("preset").addEventListener("change", async (e) => {
+      const key = e.target.value;
+      if (!key) return;
+      const p = presets[key];
+      if (!p) return;
+
+      // If password required, prompt for it
+      if (p.passwordRequired) {
+        const input = prompt("Enter preset password:");
+        if (input !== p.presetPassword) {
+          alert("Incorrect password. Preset not applied.");
+          e.target.value = "";
+          return;
+        }
+
+        setStatus("warn", "Fetching secure token…");
+        try {
+          const token = await fetchTokenFromBackend(input);
+          $("token").value = token;
+        } catch (err) {
+          alert(`Failed to fetch token: ${err.message}`);
+          e.target.value = "";
+          setStatus("err", "Token fetch failed");
+          log(`ERROR: ${err.message}`);
+          return;
+        }
+      }
+
+      // Fill remaining fields
+      if (p.targetOwner) $("targetOwner").value = p.targetOwner;
+      if (p.targetType) $("targetType").value = p.targetType;
+
+      log(`Preset "${key}" applied. Token obtained securely.`);
+      setStatus("ok", `Preset "${key}" loaded`);
+      summaryEl.textContent = `Credentials for ${p.targetOwner} ready.`;
+    });
 
     $("runBtn").addEventListener("click", async () => {
       runBtn.disabled = true;
