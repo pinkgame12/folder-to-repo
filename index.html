@@ -400,6 +400,7 @@
           </div>
           <div class="bd">
             <pre id="log"></pre>
+            <div class="inline-note" style="margin-top:10px;">Errors now include the operation, HTTP status, GitHub API message, endpoint, and request ID when GitHub provides one. Tokens are never written to the log.</div>
           </div>
         </div>
       </div>
@@ -470,7 +471,34 @@
         .slice(0, 100) || "imported-folder";
     }
 
+    function githubErrorDetails(err, context = "") {
+      const lines = [];
+
+      if (context) lines.push(`Operation: ${context}`);
+      if (err.method) lines.push(`Method: ${err.method}`);
+      if (err.status) lines.push(`HTTP status: ${err.status}`);
+      if (err.url) lines.push(`Endpoint: ${err.url}`);
+      if (err.requestId) lines.push(`GitHub request ID: ${err.requestId}`);
+      if (err.githubMessage) lines.push(`GitHub message: ${err.githubMessage}`);
+      else if (err.message) lines.push(`Error: ${err.message}`);
+
+      if (err.status === 401) {
+        lines.push("What happened: GitHub rejected the credentials used for this request.");
+        lines.push("Possible cause: the token is expired, revoked, malformed, or no longer valid.");
+      } else if (err.status === 403) {
+        lines.push("What happened: GitHub authenticated the request but refused the operation.");
+        lines.push("Possible cause: missing permission, organization policy, repository restriction, or rate limit.");
+      } else if (err.status === 404) {
+        lines.push("What happened: GitHub could not find the requested repository, branch, or endpoint.");
+      } else if (err.status === 422) {
+        lines.push("What happened: GitHub understood the request but rejected its data.");
+      }
+
+      return lines.join("\n");
+    }
+
     async function ghFetch(token, url, options = {}) {
+      const method = String(options.method || "GET").toUpperCase();
       const headers = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -484,13 +512,37 @@
       try { data = text ? JSON.parse(text) : null; } catch { data = text; }
 
       if (!res.ok) {
-        const msg = (data && (data.message || data.error)) ? (data.message || data.error) : text || `HTTP ${res.status}`;
+        const msg = (data && (data.message || data.error))
+          ? (data.message || data.error)
+          : text || `HTTP ${res.status}`;
+
         const err = new Error(msg);
         err.status = res.status;
         err.data = data;
+        err.method = method;
+        err.url = url;
+        err.githubMessage = msg;
+        err.requestId = res.headers.get("x-github-request-id") || "";
         throw err;
       }
+
       return data;
+    }
+
+    async function githubStep(context, fn) {
+      try {
+        return await fn();
+      } catch (err) {
+        const details = githubErrorDetails(err, context);
+        const wrapped = new Error(details);
+        wrapped.cause = err;
+        wrapped.status = err.status;
+        wrapped.url = err.url;
+        wrapped.method = err.method;
+        wrapped.requestId = err.requestId;
+        wrapped.githubMessage = err.githubMessage;
+        throw wrapped;
+      }
     }
 
     function parseGitHubRepoUrl(url) {
@@ -561,20 +613,45 @@
     }
 
     async function createBatchRepoFromFiles(token, targetOwner, targetType, repoName, files, sourceLabel, visibility, description, overwrite) {
-      if (!overwrite && await repoExists(token, targetOwner, repoName)) {
-        throw new Error(`Repository ${targetOwner}/${repoName} already exists.`);
-      }
-
       let repo;
-      if (overwrite && await repoExists(token, targetOwner, repoName)) {
-        repo = await getRepo(token, targetOwner, repoName);
-      } else {
-        repo = await createRepo(token, targetOwner, targetType, repoName, description, visibility);
+
+      if (!overwrite && await repoExists(token, targetOwner, repoName)) {
+        throw new Error(
+          `Operation: Check destination repository
+What happened: ${targetOwner}/${repoName} already exists.
+Action: Turn on "Overwrite existing repo" or choose a different destination name.`
+        );
       }
 
-      const headInfo = await getDefaultBranchHead(token, targetOwner, repoName, "main");
+      try {
+        if (overwrite && await repoExists(token, targetOwner, repoName)) {
+          repo = await getRepo(token, targetOwner, repoName);
+          log(`[${repoName}] Using existing destination repository.`);
+        } else {
+          repo = await githubStep(
+            `Create destination repository ${targetOwner}/${repoName}`,
+            () => createRepo(token, targetOwner, targetType, repoName, description, visibility)
+          );
+          log(`[${repoName}] Destination repository created.`);
+        }
+      } catch (err) {
+        throw err;
+      }
+
+      let headInfo;
+      try {
+        headInfo = await githubStep(
+          `Read destination branch for ${targetOwner}/${repoName}`,
+          () => getDefaultBranchHead(token, targetOwner, repoName, "main")
+        );
+      } catch (err) {
+        throw err;
+      }
+
       const branchName = headInfo.branchName;
       const parentCommitSha = headInfo.headCommitSha;
+      log(`[${repoName}] Branch: ${branchName}`);
+      log(`[${repoName}] Starting commit: ${parentCommitSha}`);
 
       const treeEntries = [];
       let index = 0;
@@ -583,9 +660,33 @@
         index++;
         log(`[${repoName}] Fetching ${index}/${files.length}: ${file.path}`);
 
-        const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(sourceLabel.owner)}/${encodeURIComponent(sourceLabel.repo)}/${encodeURIComponent(sourceLabel.branch)}/${file.sourcePath}`;
-        const base64 = await fetchRawBase64(rawUrl);
-        const blobSha = await createBlob(token, targetOwner, repoName, base64);
+        const rawUrl =
+          `https://raw.githubusercontent.com/${encodeURIComponent(sourceLabel.owner)}/${encodeURIComponent(sourceLabel.repo)}/${encodeURIComponent(sourceLabel.branch)}/${file.sourcePath}`;
+
+        let base64;
+        try {
+          base64 = await fetchRawBase64(rawUrl);
+        } catch (err) {
+          const detail =
+            `Operation: Download source file\n` +
+            `File: ${file.sourcePath}\n` +
+            `Source: ${sourceLabel.owner}/${sourceLabel.repo}@${sourceLabel.branch}\n` +
+            `Endpoint: ${rawUrl}\n` +
+            `${err.status ? `HTTP status: ${err.status}\n` : ""}` +
+            `What happened: The source file could not be downloaded.\n` +
+            `Error: ${err.message}`;
+
+          const wrapped = new Error(detail);
+          wrapped.status = err.status;
+          wrapped.url = rawUrl;
+          wrapped.method = "GET";
+          throw wrapped;
+        }
+
+        const blobSha = await githubStep(
+          `Create Git blob for ${repoName}/${file.path}`,
+          () => createBlob(token, targetOwner, repoName, base64)
+        );
 
         treeEntries.push({
           path: file.path,
@@ -596,26 +697,46 @@
       }
 
       if (!treeEntries.length) {
-        throw new Error(`Folder "${repoName}" contains no files.`);
+        throw new Error(
+          `Operation: Build import tree
+What happened: The selected folder contains no files that can be imported.`
+        );
       }
 
-      const treeSha = await createTree(token, targetOwner, repoName, treeEntries);
-      const commitSha = await createCommit(
-        token,
-        targetOwner,
-        repoName,
-        `Import ${repoName} from ${sourceLabel.owner}/${sourceLabel.repo}`,
-        treeSha,
-        [parentCommitSha]
+      const treeSha = await githubStep(
+        `Create Git tree for ${targetOwner}/${repoName}`,
+        () => createTree(token, targetOwner, repoName, treeEntries)
       );
+      log(`[${repoName}] Tree created: ${treeSha}`);
+
+      const commitSha = await githubStep(
+        `Create import commit for ${targetOwner}/${repoName}`,
+        () => createCommit(
+          token,
+          targetOwner,
+          repoName,
+          `Import ${repoName} from ${sourceLabel.owner}/${sourceLabel.repo}`,
+          treeSha,
+          [parentCommitSha]
+        )
+      );
+      log(`[${repoName}] Commit created: ${commitSha}`);
 
       try {
-        await updateRef(token, targetOwner, repoName, branchName, commitSha, true);
-      } catch (e) {
-        if (e.status === 422 || e.status === 404) {
-          await createRef(token, targetOwner, repoName, branchName, commitSha);
+        await githubStep(
+          `Update branch ${targetOwner}/${repoName}@${branchName}`,
+          () => updateRef(token, targetOwner, repoName, branchName, commitSha, true)
+        );
+        log(`[${repoName}] Branch ${branchName} updated.`);
+      } catch (err) {
+        if (err.status === 422 || err.status === 404) {
+          await githubStep(
+            `Create branch ${targetOwner}/${repoName}@${branchName}`,
+            () => createRef(token, targetOwner, repoName, branchName, commitSha)
+          );
+          log(`[${repoName}] Branch ${branchName} created.`);
         } else {
-          throw e;
+          throw err;
         }
       }
 
@@ -755,8 +876,9 @@
           results.push({ folderName, repoName, fileCount: result.fileCount, url: `https://github.com/${targetOwner}/${repoName}` });
           log(`✓ ${folderName} → ${targetOwner}/${repoName} (${result.fileCount} files)`);
         } catch (e) {
-          failures.push({ folderName, repoName, error: e.message });
-          log(`✗ ${folderName} → ${targetOwner}/${repoName}: ${e.message}`);
+          failures.push({ folderName, repoName, error: e.message, status: e.status || null, url: e.url || null });
+          log(`✗ ${folderName} → ${targetOwner}/${repoName}`);
+          log(e.message.split("\n").map(line => `  ${line}`).join("\n"));
         }
       }
 
@@ -769,8 +891,11 @@
         : "No repositories were created.";
 
       if (failures.length) {
-        log("Failures:");
-        for (const failure of failures) log(`  - ${failure.folderName}: ${failure.error}`);
+        log("Failures with details:");
+        for (const failure of failures) {
+          log(`  - ${failure.folderName}:`);
+          log(failure.error.split("\n").map(line => `      ${line}`).join("\n"));
+        }
       }
     }
 
@@ -884,6 +1009,16 @@
         method: "POST",
         body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commitSha })
       });
+    }
+
+    async function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
     }
 
     async function arrayBufferToBase64(buffer) {
