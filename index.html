@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GitHub Folder → New Repo Copier Full Edition</title>
+  <title>GitHub Folder → New Repo Copier</title>
   <style>
     :root {
       --bg: #140b26;
@@ -314,6 +314,22 @@
             <div id="sourceUrlNote" class="inline-note">Single Folder mode accepts <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. Entire Repo mode accepts a repository URL such as <code>https://github.com/owner/repo</code> or its <code>/tree/branch</code> URL.</div>
           </div>
 
+          <div id="repoFolderSelector" class="card" style="display:none; margin: 0 0 14px; box-shadow:none; background:rgba(6,7,18,.34);">
+            <div class="hd">
+              <h2>Select folders to clone</h2>
+              <p class="help">Load the repository first, then select exactly which top-level folders should become repositories.</p>
+            </div>
+            <div class="bd">
+              <div class="actions" style="margin-top:0; margin-bottom:12px;">
+                <button id="loadFoldersBtn" class="secondary" type="button">Load folders</button>
+                <button id="selectAllFoldersBtn" class="secondary" type="button" disabled>Select all</button>
+                <button id="clearFoldersBtn" class="secondary" type="button" disabled>Clear</button>
+              </div>
+              <div id="folderSelectorStatus" class="small">Enter a repository URL, then click Load folders.</div>
+              <div id="folderList" style="display:grid; gap:8px; margin-top:12px;"></div>
+            </div>
+          </div>
+
           <div class="row two">
             <div class="field">
               <label for="newRepoName">New repo name</label>
@@ -611,7 +627,154 @@
       };
     }
 
+    let loadedRepoSelection = null;
+
+    function getSelectedFolders() {
+      return Array.from(document.querySelectorAll('input[name="repoFolderChoice"]:checked'))
+        .map(el => el.value);
+    }
+
+    function renderFolderChoices(folders, tree, parsed, branch) {
+      const list = $("folderList");
+      list.innerHTML = "";
+
+      if (!folders.length) {
+        $("folderSelectorStatus").textContent = "No top-level folders were found.";
+        return;
+      }
+
+      folders.forEach((folderName, index) => {
+        const files = getRepoFolderFiles(tree, folderName);
+        const row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid rgba(182,109,255,.16);border-radius:12px;background:rgba(255,255,255,.025);cursor:pointer;margin:0;";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = "repoFolderChoice";
+        checkbox.value = folderName;
+        checkbox.style.width = "auto";
+        checkbox.checked = false;
+
+        const text = document.createElement("span");
+        text.style.flex = "1";
+        text.innerHTML = `<strong>${escapeHtml(folderName)}</strong><span style="display:block;font-size:12px;color:var(--muted);margin-top:2px;">${files.length} file${files.length === 1 ? "" : "s"} → repo <strong>${escapeHtml(normalizeRepoName(folderName))}</strong></span>`;
+
+        row.appendChild(checkbox);
+        row.appendChild(text);
+        list.appendChild(row);
+      });
+
+      $("folderSelectorStatus").textContent = `${folders.length} top-level folder${folders.length === 1 ? "" : "s"} found. Select the ones you want to clone.`;
+      $("selectAllFoldersBtn").disabled = false;
+      $("clearFoldersBtn").disabled = false;
+
+      loadedRepoSelection = { tree, folders, parsed, branch };
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+      })[ch]);
+    }
+
+    async function loadRepoFolders() {
+      const token = $("token").value.trim();
+      const repoUrl = $("folderUrl").value.trim();
+
+      if (!token) throw new Error("Paste a GitHub token first.");
+      if (!repoUrl) throw new Error("Paste a GitHub repository URL first.");
+
+      const parsed = parseGitHubRepoUrl(repoUrl);
+      setStatus("warn", "Loading repository folders");
+      $("folderSelectorStatus").textContent = "Reading repository tree…";
+      $("folderList").innerHTML = "";
+      loadedRepoSelection = null;
+
+      const repoInfo = await getRepo(token, parsed.owner, parsed.repo);
+      const branch = parsed.branch || repoInfo.default_branch || "main";
+      const tree = await getRepoTreeRecursive(token, parsed.owner, parsed.repo, branch);
+      const folders = getTopLevelFolders(tree);
+
+      renderFolderChoices(folders, tree, parsed, branch);
+      setStatus("ok", "Folders loaded");
+      log(`Loaded ${folders.length} top-level folder(s) from ${parsed.owner}/${parsed.repo}@${branch}.`);
+    }
+
     async function importEntireRepo() {
+      const token = $("token").value.trim();
+      const targetOwner = $("targetOwner").value.trim();
+      const targetType = $("targetType").value;
+      const repoUrl = $("folderUrl").value.trim();
+      const visibility = $("privacy").value;
+      const descriptionBase = $("repoDescription").value.trim();
+      const overwrite = $("mode").value === "yes";
+
+      if (!token) throw new Error("Paste a GitHub token first.");
+      if (!targetOwner) throw new Error("Enter the target owner or organization.");
+      if (!repoUrl) throw new Error("Paste a GitHub repository URL.");
+
+      const parsed = parseGitHubRepoUrl(repoUrl);
+
+      if (!loadedRepoSelection || loadedRepoSelection.parsed.owner !== parsed.owner || loadedRepoSelection.parsed.repo !== parsed.repo) {
+        throw new Error("Load the folders from this repository first.");
+      }
+
+      const selectedFolders = getSelectedFolders();
+      if (!selectedFolders.length) {
+        throw new Error("Select at least one folder to clone.");
+      }
+
+      const { tree, branch } = loadedRepoSelection;
+      log(`Selected ${selectedFolders.length} folder(s): ${selectedFolders.join(", ")}`);
+
+      const results = [];
+      const failures = [];
+
+      for (let i = 0; i < selectedFolders.length; i++) {
+        const folderName = selectedFolders[i];
+        const repoName = normalizeRepoName(folderName);
+        const files = getRepoFolderFiles(tree, folderName);
+
+        setStatus("warn", `Cloning ${folderName} (${i + 1}/${selectedFolders.length})`);
+        summaryEl.textContent = `${folderName} → ${targetOwner}/${repoName}`;
+        $("batchSummary").textContent = `${i + 1} of ${selectedFolders.length} selected folders`;
+
+        try {
+          const result = await createBatchRepoFromFiles(
+            token,
+            targetOwner,
+            targetType,
+            repoName,
+            files,
+            { owner: parsed.owner, repo: parsed.repo, branch },
+            visibility,
+            descriptionBase || `Imported from ${parsed.owner}/${parsed.repo}/${folderName}`,
+            overwrite
+          );
+
+          results.push({ folderName, repoName, fileCount: result.fileCount, url: `https://github.com/${targetOwner}/${repoName}` });
+          log(`✓ ${folderName} → ${targetOwner}/${repoName} (${result.fileCount} files)`);
+        } catch (e) {
+          failures.push({ folderName, repoName, error: e.message });
+          log(`✗ ${folderName} → ${targetOwner}/${repoName}: ${e.message}`);
+        }
+      }
+
+      if (failures.length) setStatus("err", `Completed with ${failures.length} failure(s)`);
+      else setStatus("ok", "Selected folders imported");
+
+      $("batchSummary").textContent = `${results.length} succeeded, ${failures.length} failed, ${selectedFolders.length} selected`;
+      summaryEl.innerHTML = results.length
+        ? results.map(r => `<div><strong>${escapeHtml(r.folderName)}</strong> → <a href="${r.url}" target="_blank" rel="noopener">${escapeHtml(targetOwner + "/" + r.repoName)}</a> (${r.fileCount} files)</div>`).join("")
+        : "No repositories were created.";
+
+      if (failures.length) {
+        log("Failures:");
+        for (const failure of failures) log(`  - ${failure.folderName}: ${failure.error}`);
+      }
+    }
+
+
       const token = $("token").value.trim();
       const targetOwner = $("targetOwner").value.trim();
       const targetType = $("targetType").value;
@@ -1030,22 +1193,59 @@
       setStatus("warn", "Log cleared");
       summaryEl.textContent = "Log cleared.";
       $("batchSummary").textContent = "";
+      if ($("folderList")) $("folderList").innerHTML = "";
+      loadedRepoSelection = null;
     });
 
     $("importMode").addEventListener("change", () => {
       const repoMode = $("importMode").value === "repo";
       $("sourceUrlNote").innerHTML = repoMode
-        ? 'Entire Repo mode accepts <code>https://github.com/owner/repo</code> or <code>https://github.com/owner/repo/tree/main</code>. Each top-level folder becomes one repo.'
+        ? 'Entire Repo mode accepts <code>https://github.com/owner/repo</code> or <code>https://github.com/owner/repo/tree/main</code>. Load the repo, select the folders you want, then clone them.'
         : 'Single Folder mode accepts <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. A file link imports just that file.';
 
+      $("repoFolderSelector").style.display = repoMode ? "block" : "none";
       $("newRepoName").disabled = repoMode;
-      $("newRepoName").placeholder = repoMode ? "Automatically uses each folder name" : "Auto-filled from folder name";
+      $("newRepoName").placeholder = repoMode ? "Automatically uses each selected folder name" : "Auto-filled from folder name";
       $("includeRootFolder").disabled = repoMode;
       $("includeRootFolder").checked = false;
-      $("runBtn").textContent = repoMode ? "Create repos from every folder" : "Create repo and copy folder";
+      $("runBtn").textContent = repoMode ? "Clone selected folders" : "Create repo and copy folder";
 
-      if (repoMode) {
-        $("newRepoName").value = "";
+      loadedRepoSelection = null;
+      $("folderList").innerHTML = "";
+      $("folderSelectorStatus").textContent = repoMode ? "Enter a repository URL, then click Load folders." : "";
+      $("selectAllFoldersBtn").disabled = true;
+      $("clearFoldersBtn").disabled = true;
+      if (repoMode) $("newRepoName").value = "";
+    });
+
+    $("loadFoldersBtn").addEventListener("click", async () => {
+      const btn = $("loadFoldersBtn");
+      btn.disabled = true;
+      try {
+        await loadRepoFolders();
+      } catch (err) {
+        setStatus("err", "Could not load folders");
+        $("folderSelectorStatus").textContent = err.message;
+        log(`ERROR: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $("selectAllFoldersBtn").addEventListener("click", () => {
+      document.querySelectorAll('input[name="repoFolderChoice"]').forEach(el => el.checked = true);
+      $("folderSelectorStatus").textContent = `${getSelectedFolders().length} folder(s) selected.`;
+    });
+
+    $("clearFoldersBtn").addEventListener("click", () => {
+      document.querySelectorAll('input[name="repoFolderChoice"]').forEach(el => el.checked = false);
+      $("folderSelectorStatus").textContent = "No folders selected.";
+    });
+
+    document.addEventListener("change", (event) => {
+      if (event.target && event.target.name === "repoFolderChoice") {
+        const count = getSelectedFolders().length;
+        $("folderSelectorStatus").textContent = count ? `${count} folder(s) selected.` : "No folders selected.";
       }
     });
 
