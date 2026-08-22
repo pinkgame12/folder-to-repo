@@ -370,6 +370,7 @@
 
           <div class="actions">
             <button id="runBtn">Create repo and copy folder</button>
+            <button id="saveFolderBtn" class="secondary">Save Folder as ZIP</button>
             <button id="fillExample" class="secondary">Fill example URL</button>
             <button id="clearBtn" class="secondary">Clear log</button>
           </div>
@@ -407,6 +408,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script>
     /* ===== CONFIGURATION =====
        Set this to the URL of your backend endpoint that returns the token.
@@ -1204,6 +1206,53 @@ What happened: The selected folder contains no files that can be imported.`
       summaryEl.textContent = `Credentials for ${p.targetOwner} ready.`;
     });
 
+    async function saveSelectedFolderAsZip() {
+      if (typeof JSZip === "undefined") throw new Error("ZIP library failed to load. Refresh the page and try again.");
+      const token = $("token").value.trim();
+      const mode = $("importMode") ? $("importMode").value : "folder";
+      const sourceUrl = $("folderUrl").value.trim();
+      if (!token) throw new Error("Paste a GitHub token first.");
+      if (!sourceUrl) throw new Error("Paste a GitHub source URL first.");
+      if (mode === "repo") throw new Error("Switch to Single Folder mode to save a folder as a ZIP.");
+      const parsed = parseGitHubUrl(sourceUrl);
+      if (parsed.kind !== "tree") throw new Error("Save Folder requires a GitHub folder URL using /tree/branch/folder.");
+      setStatus("warn", "Reading folder for ZIP");
+      log(`Preparing ZIP: ${parsed.owner}/${parsed.repo}@${parsed.branch}/${parsed.path}`);
+      const files = await listFolderRecursive(token, parsed.owner, parsed.repo, parsed.branch, parsed.path, false);
+      if (!files.length) throw new Error("No files were found in that folder.");
+      log(`Found ${files.length} file(s).`);
+      const zip = new JSZip();
+      let completed=0;
+      for (const file of files) {
+        completed++;
+        log(`ZIP ${completed}/${files.length}: ${file.path}`);
+        const res = await fetch(file.downloadUrl);
+        if (!res.ok) throw new Error(`Failed downloading ${file.path} for ZIP: HTTP ${res.status} ${res.statusText}`);
+        zip.file(file.path, await res.arrayBuffer());
+        $("batchSummary").textContent = `${completed} of ${files.length} files added`;
+        setStatus("warn", `Building ZIP ${completed}/${files.length}`);
+      }
+      setStatus("warn", "Generating ZIP");
+      const blob = await zip.generateAsync({type:"blob",compression:"DEFLATE",compressionOptions:{level:6}}, meta=>{
+        $("batchSummary").textContent = `Compressing: ${Math.round(meta.percent)}%`;
+      });
+      const filename = `${guessNameFromPath(parsed.path) || "github-folder"}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      setStatus("ok", "ZIP saved");
+      $("batchSummary").textContent = `${files.length} files saved to ${filename}`;
+      summaryEl.textContent = `Saved ${files.length} files from ${parsed.path} as ${filename}.`;
+      log(`Done. Downloaded ${filename}.`);
+    }
+
+    $("saveFolderBtn").addEventListener("click", async () => {
+      const btn=$("saveFolderBtn"); btn.disabled=true;
+      try { await saveSelectedFolderAsZip(); }
+      catch (err) { console.error(err); setStatus("err", "ZIP export failed"); log(`ERROR: ${err.message}`); summaryEl.textContent=err.message; }
+      finally { btn.disabled=false; }
+    });
+
     $("runBtn").addEventListener("click", async () => {
       runBtn.disabled = true;
       setStatus("warn", "Working...");
@@ -1239,6 +1288,7 @@ What happened: The selected folder contains no files that can be imported.`
 
     $("importMode").addEventListener("change", () => {
       const repoMode = $("importMode").value === "repo";
+      $("saveFolderBtn").disabled = repoMode;
       $("sourceUrlNote").innerHTML = repoMode
         ? 'Entire Repo mode accepts <code>https://github.com/owner/repo</code> or <code>https://github.com/owner/repo/tree/main</code>. Load the repo, select the folders you want, then clone them.'
         : 'Single Folder mode accepts <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. A file link imports just that file.';
