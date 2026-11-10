@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GitHub Folder → Repo Full Edition</title>
+  <title>GitHub Folder → New Repo Copier</title>
   <style>
     :root {
       --bg: #140b26;
@@ -256,9 +256,9 @@
   <div class="wrap">
     <div class="hero">
       <div class="eyebrow">GitHub repo import tool</div>
-      <h1>Copy one folder from an existing repo into a brand-new repo.</h1>
+      <h1>Copy folders and combine GitHub repositories.</h1>
       <p class="sub">
-        Paste a GitHub folder URL, authenticate with a token that can read the source repo and create repos in the destination account or organization, and the app will create a new repository named after the folder and copy every file into it.
+        Connect with a GitHub token, select source folders or organization repositories, and copy their contents into new repositories while preserving directory structure.
       </p>
     </div>
 
@@ -274,8 +274,9 @@
             <select id="importMode">
               <option value="folder">Single Folder → One Repo</option>
               <option value="repo">Entire Repo → One Repo Per Top-Level Folder</option>
+              <option value="combine">Combine Selected Org Repos → One Repo</option>
             </select>
-            <div class="inline-note">In Entire Repo mode, each top-level folder becomes its own new repository. The repository name is exactly the folder name.</div>
+            <div class="inline-note">Choose Single Folder, split one repo into separate repos, or combine selected organization repos into one destination repo.</div>
           </div>
 
           <!-- Preset selector (backend endpoint must be configured) -->
@@ -291,7 +292,7 @@
           <div class="field">
             <label for="token">GitHub token</label>
             <input id="token" type="password" placeholder="ghp_... or github_pat_..." autocomplete="off" />
-            <div class="inline-note">Needs source repo read access and repo creation permission on the target owner or org.</div>
+            <div class="inline-note">For fine-grained tokens: source repos need Metadata read and Contents read; the destination needs Contents write. Creating a new organization repo also requires Administration write and org permission to create repos.</div>
           </div>
 
           <div class="row two">
@@ -308,7 +309,7 @@
             </div>
           </div>
 
-          <div class="field">
+          <div class="field" id="sourceUrlField">
             <label for="folderUrl">GitHub source URL</label>
             <input id="folderUrl" type="url" placeholder="https://github.com/owner/repo/tree/main/path/to/folder" />
             <div id="sourceUrlNote" class="inline-note">Single Folder mode accepts <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. Entire Repo mode accepts a repository URL such as <code>https://github.com/owner/repo</code> or its <code>/tree/branch</code> URL.</div>
@@ -330,9 +331,39 @@
             </div>
           </div>
 
+          <div id="orgRepoSelector" class="card" style="display:none; margin:0 0 14px; box-shadow:none; background:rgba(6,7,18,.34);">
+            <div class="hd">
+              <h2>Connect to an organization</h2>
+              <p class="help">Load the repositories your GitHub token can access, then choose which ones to place into the destination repository.</p>
+            </div>
+            <div class="bd">
+              <div class="row two">
+                <div class="field">
+                  <label for="sourceOrg">Source organization</label>
+                  <input id="sourceOrg" type="text" placeholder="SchoolFlashCards5" />
+                </div>
+                <div class="field" style="display:flex;align-items:end;">
+                  <button id="loadOrgReposBtn" type="button" class="secondary" style="width:100%;">Connect &amp; load repositories</button>
+                </div>
+              </div>
+              <div class="inline-note">For a fine-grained PAT, choose this organization as the resource owner and grant access to all source repositories. If the destination repo will be new, choose All repositories so the token can write to it after creation. Required permissions include Metadata read, Contents read/write, and Administration write to create an organization repo.</div>
+              <div class="field" style="margin-top:14px;">
+                <label for="orgRepoSearch">Filter repositories</label>
+                <input id="orgRepoSearch" type="search" placeholder="Search repository names..." />
+              </div>
+              <div class="actions" style="margin-top:0;margin-bottom:12px;">
+                <button id="selectAllOrgReposBtn" class="secondary" type="button" disabled>Select all loaded</button>
+                <button id="clearOrgReposBtn" class="secondary" type="button" disabled>Clear selection</button>
+              </div>
+              <div id="orgRepoStatus" class="small">Enter an organization and connect to load its repositories.</div>
+              <div id="orgRepoList" style="display:grid;gap:8px;margin-top:12px;max-height:360px;overflow:auto;"></div>
+              <div class="inline-note" style="margin-top:12px;">Each selected repository is copied into a folder named after that repository. Its files and nested folders keep their original paths. Existing destination files outside those folders are preserved.</div>
+            </div>
+          </div>
+
           <div class="row two">
             <div class="field">
-              <label for="newRepoName">New repo name</label>
+              <label for="newRepoName" id="newRepoNameLabel">New repo name</label>
               <input id="newRepoName" type="text" placeholder="Auto-filled from folder name" />
             </div>
             <div class="field">
@@ -376,7 +407,7 @@
           </div>
 
           <div class="inline-note">
-            If you are creating repos inside an organization, your account must already have permission to create repositories there. A token alone cannot bypass org-level access rules.
+            Organization repository access is limited to what your token can see. When combining repos, each source repo becomes a top-level folder with its original files and nested paths. Git submodules and Git LFS object storage are not transferred by this Git-blob copy.
           </div>
         </div>
       </div>
@@ -471,6 +502,15 @@
         .replace(/^-+|-+$/g, "")
         .replace(/-+/g, "-")
         .slice(0, 100) || "imported-folder";
+    }
+
+    function normalizeDestinationRepoName(name) {
+      return String(name || "")
+        .trim()
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .replace(/-+/g, "-")
+        .slice(0, 100);
     }
 
     function githubErrorDetails(err, context = "") {
@@ -575,7 +615,8 @@
         .map(item => ({
           path: item.path,
           sha: item.sha,
-          size: item.size || 0
+          size: item.size || 0,
+          mode: item.mode || "100644"
         }));
     }
 
@@ -901,6 +942,355 @@ What happened: The selected folder contains no files that can be imported.`
       }
     }
 
+
+    let loadedOrgRepos = [];
+    const selectedOrgRepoNames = new Set();
+
+    function getSelectedOrgRepos() {
+      return loadedOrgRepos.filter(repo => selectedOrgRepoNames.has(repo.name));
+    }
+
+    function updateOrgRepoStatus() {
+      const selected = getSelectedOrgRepos();
+      $("orgRepoStatus").textContent =
+        `${loadedOrgRepos.length} repositories loaded · ${selected.length} selected`;
+    }
+
+    function renderOrgRepoChoices() {
+      const list = $("orgRepoList");
+      const query = $("orgRepoSearch").value.trim().toLowerCase();
+      const visibleRepos = loadedOrgRepos.filter(repo => {
+        const text = `${repo.name} ${repo.description || ""} ${repo.language || ""}`.toLowerCase();
+        return text.includes(query);
+      });
+
+      list.innerHTML = "";
+
+      if (!loadedOrgRepos.length) {
+        list.textContent = "No repositories loaded yet.";
+        $("selectAllOrgReposBtn").disabled = true;
+        $("clearOrgReposBtn").disabled = true;
+        updateOrgRepoStatus();
+        return;
+      }
+
+      if (!visibleRepos.length) {
+        list.textContent = "No repositories match that filter.";
+      }
+
+      for (const repo of visibleRepos) {
+        const row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:flex-start;gap:12px;padding:11px 12px;border:1px solid rgba(182,109,255,.16);border-radius:12px;background:rgba(255,255,255,.025);cursor:pointer;margin:0;";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = "orgRepoChoice";
+        checkbox.value = repo.name;
+        checkbox.checked = selectedOrgRepoNames.has(repo.name);
+        checkbox.style.width = "auto";
+        checkbox.style.marginTop = "3px";
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selectedOrgRepoNames.add(repo.name);
+          else selectedOrgRepoNames.delete(repo.name);
+          updateOrgRepoStatus();
+        });
+
+        const text = document.createElement("span");
+        text.style.flex = "1";
+
+        const visibility = repo.private ? "Private" : "Public";
+        const archived = repo.archived ? " · Archived" : "";
+        const language = repo.language ? ` · ${repo.language}` : "";
+        const description = repo.description ? repo.description : "No description";
+        text.innerHTML =
+          `<strong>${escapeHtml(repo.name)}</strong>` +
+          `<span style="display:block;font-size:12px;color:var(--muted);margin-top:3px;">` +
+          `${visibility}${archived}${language} · ${escapeHtml(description)}` +
+          `</span>`;
+
+        row.appendChild(checkbox);
+        row.appendChild(text);
+        list.appendChild(row);
+      }
+
+      $("selectAllOrgReposBtn").disabled = loadedOrgRepos.length === 0;
+      $("clearOrgReposBtn").disabled = selectedOrgRepoNames.size === 0;
+      updateOrgRepoStatus();
+    }
+
+    async function loadOrganizationRepositories() {
+      const token = $("token").value.trim();
+      const org = $("sourceOrg").value.trim();
+
+      if (!token) throw new Error("Enter a GitHub token first.");
+      if (!org) throw new Error("Enter the organization name first.");
+
+      setStatus("warn", `Connecting to ${org}`);
+      $("orgRepoStatus").textContent = `Connecting to ${org} and reading its repository list…`;
+      $("orgRepoList").innerHTML = "";
+      loadedOrgRepos = [];
+      selectedOrgRepoNames.clear();
+
+      const allRepos = [];
+      for (let page = 1; ; page++) {
+        const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/repos?type=all&sort=full_name&direction=asc&per_page=100&page=${page}`;
+        const batch = await githubStep(
+          `Load repositories from organization ${org} (page ${page})`,
+          () => ghFetch(token, url)
+        );
+
+        if (!Array.isArray(batch)) {
+          throw new Error(`GitHub returned an unexpected repository list for ${org}.`);
+        }
+
+        allRepos.push(...batch);
+        log(`Loaded page ${page}: ${batch.length} repository(ies) from ${org}.`);
+
+        if (batch.length < 100) break;
+      }
+
+      loadedOrgRepos = allRepos.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+      );
+
+      renderOrgRepoChoices();
+      setStatus("ok", `Connected to ${org}`);
+      $("orgRepoStatus").textContent =
+        `Connected to ${org}. ${loadedOrgRepos.length} repositories are visible to this token. Select the repositories to combine.`;
+      log(`Connected to organization ${org}; ${loadedOrgRepos.length} repositories are available to select.`);
+    }
+
+    async function readSourceBlobBase64(token, repo, file) {
+      const endpoint = `https://api.github.com/repos/${encodeURIComponent(repo.owner.login)}/${encodeURIComponent(repo.name)}/git/blobs/${file.sha}`;
+      const blob = await githubStep(
+        `Read source blob ${repo.full_name}:${file.path}`,
+        () => ghFetch(token, endpoint)
+      );
+
+      if (blob.encoding !== "base64" || typeof blob.content !== "string") {
+        throw new Error(
+          `Could not read ${repo.full_name}:${file.path} as a Base64 Git blob. GitHub returned encoding "${blob.encoding || "unknown"}".`
+        );
+      }
+
+      return blob.content.replace(/\s+/g, "");
+    }
+
+    async function waitForDestinationHead(token, owner, repoName) {
+      let lastError;
+      for (let attempt = 1; attempt <= 8; attempt++) {
+        try {
+          return await getDefaultBranchHead(token, owner, repoName, "main");
+        } catch (err) {
+          lastError = err;
+          const retryable =
+            err.status === 404 ||
+            /Git Repository is empty|branch.*not found|not found/i.test(err.message);
+          if (!retryable || attempt === 8) break;
+          log(`Destination branch is not ready yet; retry ${attempt}/7…`);
+          await new Promise(resolve => setTimeout(resolve, 900));
+        }
+      }
+      throw lastError || new Error("Could not read the destination repository's default branch.");
+    }
+
+    async function combineSelectedOrgRepos() {
+      const token = $("token").value.trim();
+      const sourceOrg = $("sourceOrg").value.trim();
+      const targetOwner = $("targetOwner").value.trim();
+      const targetType = $("targetType").value;
+      const destinationNameInput = $("newRepoName").value.trim();
+      if (!destinationNameInput) throw new Error("Enter the name for the combined destination repository.");
+      const destinationName = normalizeDestinationRepoName(destinationNameInput);
+      const visibility = $("privacy").value;
+      const description = $("repoDescription").value.trim();
+      const overwrite = $("mode").value === "yes";
+
+      if (!token) throw new Error("Enter a GitHub token first.");
+      if (!sourceOrg) throw new Error("Enter and connect to a source organization first.");
+      if (!targetOwner) throw new Error("Enter the destination owner or organization.");
+      if (!destinationName) throw new Error("Enter a destination repository name.");
+      if (!loadedOrgRepos.length) throw new Error("Click Connect & load repositories first.");
+
+      const selected = getSelectedOrgRepos();
+      if (!selected.length) throw new Error("Select at least one source repository.");
+
+      if (
+        sourceOrg.toLowerCase() === targetOwner.toLowerCase() &&
+        selected.some(repo => repo.name.toLowerCase() === destinationName.toLowerCase())
+      ) {
+        throw new Error("The destination repo is also selected as a source. Unselect it or choose a different destination name.");
+      }
+
+      $("batchSummary").textContent = `Preparing ${selected.length} source repositories…`;
+      log(`Preparing to combine ${selected.length} repository(ies) from ${sourceOrg} into ${targetOwner}/${destinationName}.`);
+
+      // Read every source tree first. This avoids creating the destination if source access is missing.
+      const plans = [];
+      let totalFiles = 0;
+
+      for (let i = 0; i < selected.length; i++) {
+        const listedRepo = selected[i];
+        setStatus("warn", `Inspecting ${listedRepo.name} (${i + 1}/${selected.length})`);
+        $("batchSummary").textContent = `Inspecting ${i + 1} of ${selected.length}: ${listedRepo.name}`;
+
+        const repoInfo = await githubStep(
+          `Read source repository ${listedRepo.full_name}`,
+          () => getRepo(token, sourceOrg, listedRepo.name)
+        );
+
+        const branch = repoInfo.default_branch;
+        if (!branch) {
+          log(`[${listedRepo.name}] Skipped: repository has no default branch.`);
+          continue;
+        }
+
+        const tree = await githubStep(
+          `Read file tree for ${listedRepo.full_name}@${branch}`,
+          () => getRepoTreeRecursive(token, sourceOrg, listedRepo.name, branch)
+        );
+
+        if (!tree.length) {
+          log(`[${listedRepo.name}] Skipped: repository has no regular files.`);
+          continue;
+        }
+
+        const tooLarge = tree.find(file => file.size > 100 * 1024 * 1024);
+        if (tooLarge) {
+          throw new Error(
+            `Source repository ${listedRepo.name} contains a file larger than GitHub's 100 MiB Git blob limit: ${tooLarge.path} (${(tooLarge.size / 1024 / 1024).toFixed(1)} MiB).`
+          );
+        }
+
+        plans.push({ repo: repoInfo, branch, files: tree });
+        totalFiles += tree.length;
+        log(`[${listedRepo.name}] Ready: ${tree.length} file(s) on branch ${branch}.`);
+      }
+
+      if (!plans.length || !totalFiles) {
+        throw new Error("None of the selected repositories contained files that can be copied.");
+      }
+
+      // Create or reuse the one destination repository.
+      setStatus("warn", "Preparing destination repository");
+      let destinationRepo;
+
+      const exists = await repoExists(token, targetOwner, destinationName);
+      if (exists && !overwrite) {
+        throw new Error(
+          `Destination repository ${targetOwner}/${destinationName} already exists. Turn on "Overwrite existing repo" to merge into it.`
+        );
+      }
+
+      if (exists) {
+        destinationRepo = await getRepo(token, targetOwner, destinationName);
+        log(`Using existing destination ${targetOwner}/${destinationName}.`);
+      } else {
+        destinationRepo = await githubStep(
+          `Create destination repository ${targetOwner}/${destinationName}`,
+          () => createRepo(token, targetOwner, targetType, destinationName, description, visibility)
+        );
+        log(`Created destination repository ${destinationRepo.full_name}.`);
+      }
+
+      const head = await waitForDestinationHead(token, targetOwner, destinationName);
+      const branchName = head.branchName;
+      const parentCommitSha = head.headCommitSha;
+
+      const baseCommit = await githubStep(
+        `Read destination base tree for ${targetOwner}/${destinationName}`,
+        () => ghFetch(
+          token,
+          `https://api.github.com/repos/${encodeURIComponent(targetOwner)}/${encodeURIComponent(destinationName)}/git/commits/${encodeURIComponent(parentCommitSha)}`
+        )
+      );
+
+      if (!baseCommit.tree || !baseCommit.tree.sha) {
+        throw new Error("GitHub did not return the destination repository's base tree.");
+      }
+
+      log(`Destination branch: ${branchName}`);
+      log(`Destination starting commit: ${parentCommitSha}`);
+      log(`Copying ${totalFiles} file(s) into ${plans.length} folder(s).`);
+
+      // Read private/public source blobs through the authenticated Git Database API,
+      // then write each blob into the destination repository.
+      const blobCache = new Map();
+      const treeEntries = [];
+      let completed = 0;
+
+      for (const plan of plans) {
+        const repoFolder = plan.repo.name;
+
+        for (const file of plan.files) {
+          completed++;
+          setStatus("warn", `Copying ${completed}/${totalFiles} files`);
+          $("batchSummary").textContent =
+            `${completed} of ${totalFiles} files · ${repoFolder}/${file.path}`;
+          log(`[${repoFolder}] ${completed}/${totalFiles}: ${file.path}`);
+
+          let destinationBlobSha = blobCache.get(file.sha);
+          if (!destinationBlobSha) {
+            const base64 = await readSourceBlobBase64(token, plan.repo, file);
+            destinationBlobSha = await githubStep(
+              `Write destination blob ${destinationName}/${repoFolder}/${file.path}`,
+              () => createBlob(token, targetOwner, destinationName, base64)
+            );
+            blobCache.set(file.sha, destinationBlobSha);
+          }
+
+          treeEntries.push({
+            path: `${repoFolder}/${file.path}`,
+            mode: file.mode || "100644",
+            type: "blob",
+            sha: destinationBlobSha
+          });
+        }
+      }
+
+      setStatus("warn", "Building combined repository tree");
+      const treeSha = await githubStep(
+        `Create combined tree for ${targetOwner}/${destinationName}`,
+        () => createTree(
+          token,
+          targetOwner,
+          destinationName,
+          treeEntries,
+          baseCommit.tree.sha
+        )
+      );
+
+      const commitSha = await githubStep(
+        `Commit combined repositories to ${targetOwner}/${destinationName}`,
+        () => createCommit(
+          token,
+          targetOwner,
+          destinationName,
+          `Combine ${plans.length} repositories from ${sourceOrg}`,
+          treeSha,
+          [parentCommitSha]
+        )
+      );
+
+      await githubStep(
+        `Update destination branch ${targetOwner}/${destinationName}@${branchName}`,
+        () => updateRef(token, targetOwner, destinationName, branchName, commitSha, false)
+      );
+
+      setStatus("ok", "Repository combination complete");
+      $("batchSummary").textContent =
+        `${plans.length} repositories combined · ${totalFiles} files copied`;
+      summaryEl.innerHTML =
+        `<strong>${escapeHtml(targetOwner + "/" + destinationName)}</strong>` +
+        `<div style="margin-top:6px;"><a href="https://github.com/${encodeURIComponent(targetOwner)}/${encodeURIComponent(destinationName)}" target="_blank" rel="noopener">Open combined repository</a></div>`;
+
+      log(`SUCCESS: Combined ${plans.length} repositories and ${totalFiles} files.`);
+      for (const plan of plans) {
+        log(`  ${plan.repo.name}/ ← ${plan.files.length} file(s)`);
+      }
+      log(`Destination: https://github.com/${targetOwner}/${destinationName}`);
+    }
+
     async function listFolderRecursive(token, owner, repo, branch, pathPrefix, keepRootFolder) {
       const files = [];
       const startPath = pathPrefix || "";
@@ -983,10 +1373,13 @@ What happened: The selected folder contains no files that can be imported.`
       return res.sha;
     }
 
-    async function createTree(token, owner, repo, treeEntries) {
+    async function createTree(token, owner, repo, treeEntries, baseTreeSha = null) {
+      const body = { tree: treeEntries };
+      if (baseTreeSha) body.base_tree = baseTreeSha;
+
       const res = await ghFetch(token, `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees`, {
         method: "POST",
-        body: JSON.stringify({ tree: treeEntries })
+        body: JSON.stringify(body)
       });
       return res.sha;
     }
@@ -1043,6 +1436,9 @@ What happened: The selected folder contains no files that can be imported.`
     async function importFolder() {
       if ($("importMode").value === "repo") {
         return await importEntireRepo();
+      }
+      if ($("importMode").value === "combine") {
+        return await combineSelectedOrgRepos();
       }
 
       const token = $("token").value.trim();
@@ -1200,6 +1596,9 @@ What happened: The selected folder contains no files that can be imported.`
       // Fill remaining fields
       if (p.targetOwner) $("targetOwner").value = p.targetOwner;
       if (p.targetType) $("targetType").value = p.targetType;
+      if (p.targetOwner && $("sourceOrg") && !$("sourceOrg").value.trim()) {
+        $("sourceOrg").value = p.targetOwner;
+      }
 
       log(`Preset "${key}" applied. Token obtained securely.`);
       setStatus("ok", `Preset "${key}" loaded`);
@@ -1287,27 +1686,66 @@ What happened: The selected folder contains no files that can be imported.`
     });
 
     $("importMode").addEventListener("change", () => {
-      const repoMode = $("importMode").value === "repo";
-      $("saveFolderBtn").disabled = repoMode;
+      const mode = $("importMode").value;
+      const folderMode = mode === "folder";
+      const repoMode = mode === "repo";
+      const combineMode = mode === "combine";
+
+      $("saveFolderBtn").disabled = !folderMode;
+      $("sourceUrlField").style.display = combineMode ? "none" : "block";
       $("sourceUrlNote").innerHTML = repoMode
         ? 'Entire Repo mode accepts <code>https://github.com/owner/repo</code> or <code>https://github.com/owner/repo/tree/main</code>. Load the repo, select the folders you want, then clone them.'
         : 'Single Folder mode accepts <code>/tree/branch/folder</code> or <code>/blob/branch/file</code>. A file link imports just that file.';
 
       $("repoFolderSelector").style.display = repoMode ? "block" : "none";
+      $("orgRepoSelector").style.display = combineMode ? "block" : "none";
+
       $("newRepoName").disabled = repoMode;
-      $("newRepoName").placeholder = repoMode ? "Automatically uses each selected folder name" : "Auto-filled from folder name";
-      $("includeRootFolder").disabled = repoMode;
+      $("newRepoName").placeholder = repoMode
+        ? "Automatically uses each selected folder name"
+        : combineMode
+          ? "Name for the combined destination repository"
+          : "Auto-filled from folder name";
+
+      $("newRepoNameLabel").textContent = combineMode
+        ? "Combined destination repo name"
+        : "New repo name";
+
+      $("includeRootFolder").disabled = !folderMode;
       $("includeRootFolder").checked = false;
-      $("runBtn").textContent = repoMode ? "Clone selected folders" : "Create repo and copy folder";
+
+      $("runBtn").textContent = folderMode
+        ? "Create repo and copy folder"
+        : repoMode
+          ? "Clone selected folders"
+          : "Combine selected repos into one repo";
+
+      if (combineMode && !$("sourceOrg").value.trim()) {
+        $("sourceOrg").value = $("targetOwner").value.trim();
+      }
 
       loadedRepoSelection = null;
       $("folderList").innerHTML = "";
-      $("folderSelectorStatus").textContent = repoMode ? "Enter a repository URL, then click Load folders." : "";
+      $("folderSelectorStatus").textContent = repoMode
+        ? "Enter a repository URL, then click Load folders."
+        : "";
       $("selectAllFoldersBtn").disabled = true;
       $("clearFoldersBtn").disabled = true;
-      if (repoMode) $("newRepoName").value = "";
-    });
 
+      if (!repoMode) $("newRepoName").disabled = false;
+      if (repoMode) $("newRepoName").value = "";
+
+      if (!combineMode) {
+        loadedOrgRepos = [];
+        selectedOrgRepoNames.clear();
+        $("orgRepoList").innerHTML = "";
+        $("orgRepoStatus").textContent = "";
+        $("selectAllOrgReposBtn").disabled = true;
+        $("clearOrgReposBtn").disabled = true;
+      } else {
+        renderOrgRepoChoices();
+      }
+    });
     $("loadFoldersBtn").addEventListener("click", async () => {
       const btn = $("loadFoldersBtn");
       btn.disabled = true;
@@ -1336,6 +1774,40 @@ What happened: The selected folder contains no files that can be imported.`
       if (event.target && event.target.name === "repoFolderChoice") {
         const count = getSelectedFolders().length;
         $("folderSelectorStatus").textContent = count ? `${count} folder(s) selected.` : "No folders selected.";
+      }
+    });
+
+    $("loadOrgReposBtn").addEventListener("click", async () => {
+      const btn = $("loadOrgReposBtn");
+      btn.disabled = true;
+      try {
+        await loadOrganizationRepositories();
+      } catch (err) {
+        setStatus("err", "Could not connect to organization");
+        $("orgRepoStatus").textContent = err.message;
+        log(`ERROR: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $("selectAllOrgReposBtn").addEventListener("click", () => {
+      for (const repo of loadedOrgRepos) selectedOrgRepoNames.add(repo.name);
+      renderOrgRepoChoices();
+      $("orgRepoStatus").textContent =
+        `${loadedOrgRepos.length} repositories loaded · ${getSelectedOrgRepos().length} selected`;
+    });
+
+    $("clearOrgReposBtn").addEventListener("click", () => {
+      selectedOrgRepoNames.clear();
+      renderOrgRepoChoices();
+    });
+
+    $("orgRepoSearch").addEventListener("input", renderOrgRepoChoices);
+
+    $("targetOwner").addEventListener("input", () => {
+      if ($("importMode").value === "combine" && !$("sourceOrg").value.trim()) {
+        $("sourceOrg").value = $("targetOwner").value.trim();
       }
     });
 
